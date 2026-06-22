@@ -1,4 +1,5 @@
 # PotholeNet
+<<<<<<< HEAD
 
 PotholeNet is a community-driven road hazard intelligence platform built with the MERN stack, OpenStreetMap, real-time GPS tracking, and machine learning.
 
@@ -79,3 +80,6 @@ Later, replace the placeholder detector in `ml-service/app/detector.py` with YOL
 - Community votes: still exists, fixed, dangerous
 - Live map updates via Socket.IO
 - Nearby warning banner and voice alert
+=======
+An AI-powered road intelligence platform built with MERN Stack, OpenStreetMap, and Computer Vision. RoadPulse AI detects potholes through user cameras, stores geotagged road hazard data, and delivers real-time navigation alerts to help drivers avoid unsafe roads.
+>>>>>>> 32eafdde82322771ed7e29b3954740d5c1e4f80e
