@@ -1,4 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+const ML_SERVICE_URL = import.meta.env.VITE_ML_SERVICE_URL || "http://localhost:8000";
 const OSRM_BASE_URL = "https://router.project-osrm.org";
 
 export async function fetchPotholes(bounds) {
@@ -13,6 +14,12 @@ export async function fetchPotholes(bounds) {
 
   const response = await fetch(`${API_BASE_URL}/api/potholes?${params}`);
   if (!response.ok) throw new Error("Could not load potholes");
+  return response.json();
+}
+
+export async function fetchDashboard() {
+  const response = await fetch(`${API_BASE_URL}/api/potholes/dashboard`);
+  if (!response.ok) throw new Error("Could not load dashboard");
   return response.json();
 }
 
@@ -35,6 +42,19 @@ export async function votePothole(id, vote) {
   });
 
   if (!response.ok) throw new Error("Could not submit vote");
+  return response.json();
+}
+
+export async function detectImage(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${ML_SERVICE_URL}/detect`, {
+    method: "POST",
+    body: formData
+  });
+
+  if (!response.ok) throw new Error("ML detection failed");
   return response.json();
 }
 

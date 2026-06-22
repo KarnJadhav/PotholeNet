@@ -1,9 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import L from "leaflet";
+import "leaflet.heat";
 import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
 import { io } from "socket.io-client";
-import { AlertTriangle, Camera, LocateFixed, MapPin, Navigation, Search, ShieldAlert } from "lucide-react";
-import { fetchPotholes, getRoute, reportPothole, searchPlaces, votePothole } from "./api";
-import { distanceMeters, routeHazards } from "./geo";
+import {
+  AlertTriangle,
+  BarChart3,
+  Camera,
+  Flame,
+  LocateFixed,
+  MapPin,
+  Navigation,
+  Search,
+  ShieldAlert,
+  Video
+} from "lucide-react";
+import {
+  detectImage,
+  fetchDashboard,
+  fetchPotholes,
+  getRoute,
+  reportPothole,
+  searchPlaces,
+  votePothole
+} from "./api";
+import { analyzeRouteRisk, distanceMeters } from "./geo";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
 const defaultCenter = [18.5204, 73.8567];
@@ -21,6 +42,33 @@ function MapEvents({ onBoundsChange }) {
   return null;
 }
 
+function HeatmapLayer({ potholes, enabled }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!enabled || !potholes.length) return undefined;
+
+    const heatPoints = potholes.map((pothole) => {
+      const intensity = Math.max(0.25, (pothole.riskScore || 35) / 100);
+      return [pothole.latitude, pothole.longitude, intensity];
+    });
+    const layer = L.heatLayer(heatPoints, {
+      radius: 28,
+      blur: 20,
+      maxZoom: 17,
+      gradient: {
+        0.25: "#22c55e",
+        0.55: "#f59e0b",
+        0.85: "#ef4444"
+      }
+    }).addTo(map);
+
+    return () => layer.remove();
+  }, [enabled, map, potholes]);
+
+  return null;
+}
+
 function severityColor(severity) {
   if (severity === "severe") return "#ef4444";
   if (severity === "medium") return "#f59e0b";
@@ -31,6 +79,12 @@ function getCoords(pothole) {
   return [pothole.latitude, pothole.longitude];
 }
 
+function primaryDetection(result, threshold = 0.65) {
+  return result.detections
+    ?.filter((item) => item.class === "pothole" && item.confidence >= threshold)
+    .sort((a, b) => b.confidence - a.confidence)[0];
+}
+
 export default function App() {
   const [position, setPosition] = useState(null);
   const [potholes, setPotholes] = useState([]);
@@ -38,12 +92,24 @@ export default function App() {
   const [results, setResults] = useState([]);
   const [destination, setDestination] = useState(null);
   const [route, setRoute] = useState(null);
+  const [dashboard, setDashboard] = useState(null);
+  const [view, setView] = useState("map");
   const [status, setStatus] = useState("Ready");
   const [watching, setWatching] = useState(false);
+  const [drivingMode, setDrivingMode] = useState(false);
+  const [heatmapEnabled, setHeatmapEnabled] = useState(false);
   const alertedRef = useRef(new Set());
   const watchIdRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const drivingTimerRef = useRef(null);
+  const processingFrameRef = useRef(false);
+  const lastAutoReportRef = useRef({ at: 0, lat: null, lng: null });
 
-  const hazardsOnRoute = useMemo(() => routeHazards(route, potholes), [route, potholes]);
+  const routeRisk = useMemo(() => analyzeRouteRisk(route, potholes), [route, potholes]);
+  const routeColor = routeRisk.level === "Dangerous" ? "#ef4444" : routeRisk.level === "Moderate" ? "#f59e0b" : "#2563eb";
   const nearestHazard = useMemo(() => {
     if (!position) return null;
 
@@ -65,6 +131,18 @@ export default function App() {
       () => setStatus("Location permission is needed for live road alerts"),
       { enableHighAccuracy: true }
     );
+  }, []);
+
+  useEffect(() => {
+    if (view !== "dashboard") return;
+
+    fetchDashboard()
+      .then(setDashboard)
+      .catch((error) => setStatus(error.message));
+  }, [view, potholes]);
+
+  useEffect(() => {
+    return () => stopDrivingMode(false);
   }, []);
 
   useEffect(() => {
@@ -126,6 +204,108 @@ export default function App() {
     );
   }
 
+  async function startDrivingMode() {
+    if (!position) {
+      setStatus("Location is required before driving mode");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 960 }, height: { ideal: 540 } },
+        audio: false
+      });
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      if (!watching) toggleTracking();
+      setDrivingMode(true);
+      setStatus("Automatic driving mode started");
+      drivingTimerRef.current = window.setInterval(captureDrivingFrame, 2000);
+    } catch (_error) {
+      setStatus("Camera permission is needed for driving mode");
+    }
+  }
+
+  function stopDrivingMode(updateState = true) {
+    window.clearInterval(drivingTimerRef.current);
+    drivingTimerRef.current = null;
+    processingFrameRef.current = false;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+
+    if (updateState) setDrivingMode(false);
+  }
+
+  function toggleDrivingMode() {
+    if (drivingMode) {
+      stopDrivingMode();
+      setStatus("Automatic driving mode stopped");
+      return;
+    }
+
+    startDrivingMode();
+  }
+
+  async function captureDrivingFrame() {
+    if (processingFrameRef.current || !position || !videoRef.current || !canvasRef.current) return;
+    if (videoRef.current.readyState < 2) return;
+
+    const last = lastAutoReportRef.current;
+    const movedEnough =
+      last.lat === null ||
+      distanceMeters({ lat: position.lat, lng: position.lng }, { lat: last.lat, lng: last.lng }) > 8;
+
+    if (!movedEnough && Date.now() - last.at < 15000) return;
+
+    processingFrameRef.current = true;
+
+    try {
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 360;
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.72));
+      if (!blob) return;
+
+      const file = new File([blob], `driving-frame-${Date.now()}.jpg`, { type: "image/jpeg" });
+      const result = await detectImage(file);
+      const detection = primaryDetection(result);
+
+      if (!detection) {
+        setStatus("Driving mode scanning");
+        return;
+      }
+
+      await reportPothole({
+        latitude: position.lat,
+        longitude: position.lng,
+        confidence: detection.confidence,
+        severity: detection.severity || "medium",
+        area: detection.area || 0,
+        source: "driving_mode",
+        reportedBy: "driving-mode"
+      });
+
+      lastAutoReportRef.current = { at: Date.now(), lat: position.lat, lng: position.lng };
+      setStatus(`Auto reported ${detection.severity || "medium"} pothole`);
+    } catch (error) {
+      setStatus(error.message);
+    } finally {
+      processingFrameRef.current = false;
+    }
+  }
+
   async function handleSearch(event) {
     event.preventDefault();
     if (!query.trim()) return;
@@ -163,24 +343,43 @@ export default function App() {
     }
   }
 
-  async function submitDetection() {
+  function submitDetection() {
     if (!position) {
       setStatus("Location is required before saving a pothole");
       return;
     }
 
-    setStatus("Saving detected pothole");
+    fileInputRef.current?.click();
+  }
+
+  async function handleDetectionFile(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file || !position) return;
+
+    setStatus("Running AI detection");
 
     try {
+      const result = await detectImage(file);
+      const detection = primaryDetection(result, 0.5);
+
+      if (!detection) {
+        setStatus("No pothole detected in image");
+        return;
+      }
+
+      setStatus("Saving AI pothole report");
       await reportPothole({
         latitude: position.lat,
         longitude: position.lng,
-        confidence: 0.88,
-        severity: "medium",
+        confidence: detection.confidence,
+        severity: detection.severity || "medium",
+        area: detection.area || 0,
         source: "camera",
         reportedBy: "demo-user"
       });
-      setStatus("Pothole report saved");
+      setStatus(`Pothole saved from ${result.model}`);
     } catch (error) {
       setStatus(error.message);
     }
@@ -229,6 +428,21 @@ export default function App() {
           </div>
         )}
 
+        <div className="view-tabs" role="tablist" aria-label="View">
+          <button type="button" className={view === "map" ? "active" : ""} onClick={() => setView("map")}>
+            <MapPin size={16} />
+            Map
+          </button>
+          <button
+            type="button"
+            className={view === "dashboard" ? "active" : ""}
+            onClick={() => setView("dashboard")}
+          >
+            <BarChart3 size={16} />
+            Admin
+          </button>
+        </div>
+
         <div className="control-grid">
           <button type="button" onClick={locateMe}>
             <LocateFixed size={18} />
@@ -242,7 +456,26 @@ export default function App() {
             <Camera size={18} />
             Detect
           </button>
+          <button type="button" onClick={toggleDrivingMode} className={drivingMode ? "active danger" : ""}>
+            <Video size={18} />
+            Drive
+          </button>
+          <button type="button" onClick={() => setHeatmapEnabled((current) => !current)} className={heatmapEnabled ? "active heat" : ""}>
+            <Flame size={18} />
+            Heat
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="visually-hidden"
+            onChange={handleDetectionFile}
+          />
         </div>
+
+        <video ref={videoRef} className={drivingMode ? "camera-preview" : "visually-hidden"} muted playsInline />
+        <canvas ref={canvasRef} className="visually-hidden" />
 
         <section className="status-panel">
           <span>Status</span>
@@ -256,9 +489,59 @@ export default function App() {
           </div>
           <div>
             <span>On route</span>
-            <strong>{hazardsOnRoute.length}</strong>
+            <strong>{routeRisk.hazards.length}</strong>
           </div>
         </section>
+
+        {route && (
+          <section className={`risk-panel risk-${routeRisk.level.toLowerCase()}`}>
+            <div>
+              <span>Route risk</span>
+              <strong>{routeRisk.level}</strong>
+            </div>
+            <div className="risk-meter" aria-label={`Route risk ${routeRisk.score} percent`}>
+              <span style={{ width: `${routeRisk.score}%` }} />
+            </div>
+            <p>
+              {routeRisk.score}% risk across {routeRisk.distanceKm.toFixed(1)} km with{" "}
+              {routeRisk.hazards.length} hazard(s)
+            </p>
+          </section>
+        )}
+
+        {view === "dashboard" && dashboard && (
+          <section className="dashboard-panel">
+            <div className="dashboard-grid">
+              <div>
+                <span>Active</span>
+                <strong>{dashboard.totals.activeHazards}</strong>
+              </div>
+              <div>
+                <span>Today</span>
+                <strong>{dashboard.totals.newReportsToday}</strong>
+              </div>
+              <div>
+                <span>Severe</span>
+                <strong>{dashboard.totals.severeHazards}</strong>
+              </div>
+              <div>
+                <span>Repair</span>
+                <strong>{dashboard.totals.repairQueue}</strong>
+              </div>
+            </div>
+            <div className="repair-table">
+              {dashboard.repairQueue.slice(0, 6).map((item) => (
+                <div key={item.id} className="repair-row">
+                  <div>
+                    <strong>{item.roadName}</strong>
+                    <span>{item.potholes} report(s) · {item.severity}</span>
+                  </div>
+                  <b>{item.riskScore}%</b>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {nearestHazard && (
           <section className="warning">
@@ -278,6 +561,7 @@ export default function App() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           <MapEvents onBoundsChange={loadPotholes} />
+          <HeatmapLayer potholes={potholes} enabled={heatmapEnabled} />
 
           {position && (
             <CircleMarker center={[position.lat, position.lng]} radius={9} pathOptions={{ color: "#2563eb" }}>
@@ -294,7 +578,7 @@ export default function App() {
           {route && (
             <Polyline
               positions={route.geometry.coordinates.map(([lng, lat]) => [lat, lng])}
-              pathOptions={{ color: "#2563eb", weight: 5, opacity: 0.75 }}
+              pathOptions={{ color: routeColor, weight: 5, opacity: 0.78 }}
             />
           )}
 

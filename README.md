@@ -57,7 +57,7 @@ Backend API: `http://localhost:5000`
 
 ## ML Service
 
-The ML service currently returns a simulated pothole detection so the full app flow can be tested before a model is trained.
+The ML service can run a YOLO model when a trained model file exists at `ml-service/models/pothole-yolov8n.pt`. If no model file is present, it returns a simulated pothole detection so the full app flow can be tested before training is complete.
 
 ```bash
 cd ml-service
@@ -67,7 +67,48 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Later, replace the placeholder detector in `ml-service/app/detector.py` with YOLO inference.
+To use a custom model path:
+
+```bash
+set YOLO_MODEL_PATH=models\best.pt
+uvicorn app.main:app --reload --port 8000
+```
+
+The frontend `Detect` button opens the device camera or image picker, sends the image to the ML service, and saves the pothole with current GPS coordinates when a pothole is detected.
+
+## Route Risk Analysis
+
+After a route is generated, the frontend checks known potholes within 20 meters of the route and calculates a risk score from hazard count, severity, and route distance:
+
+- Safe: low risk
+- Moderate: medium risk
+- Dangerous: high risk
+
+## Automatic Driving Mode
+
+The `Drive` control starts camera-based driving mode:
+
+```text
+Camera stream
+  -> capture frame every 2 seconds
+  -> send frame to ML service
+  -> confidence threshold check
+  -> auto-save report with GPS coordinates
+```
+
+Automatic reports are stored with `source: "driving_mode"` and include detection `area`, `confidence`, `severity`, and backend `riskScore`.
+
+## Heatmap and Admin Dashboard
+
+The `Heat` control overlays a Leaflet heatmap where lower-risk hazards trend green, moderate hazards trend yellow, and high-risk hazards trend red.
+
+The `Admin` tab shows city operations metrics:
+
+- Active hazards
+- New reports today
+- Severe hazards
+- Repair queue count
+- Highest-risk road segments
 
 ## MVP Features
 

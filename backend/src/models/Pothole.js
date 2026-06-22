@@ -9,8 +9,9 @@ const reportSchema = new mongoose.Schema(
       required: true
     },
     imageUrl: String,
+    area: { type: Number, min: 0, default: 0 },
     reportedBy: { type: String, default: "anonymous" },
-    source: { type: String, enum: ["camera", "manual", "import"], default: "camera" }
+    source: { type: String, enum: ["camera", "driving_mode", "manual", "import"], default: "camera" }
   },
   { timestamps: true }
 );
@@ -39,6 +40,8 @@ const potholeSchema = new mongoose.Schema(
       required: true
     },
     confidence: { type: Number, min: 0, max: 1, required: true },
+    area: { type: Number, min: 0, default: 0 },
+    riskScore: { type: Number, min: 0, max: 100, default: 0 },
     reports: [reportSchema],
     votes: {
       stillExists: { type: Number, default: 0 },

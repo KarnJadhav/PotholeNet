@@ -27,6 +27,7 @@ function distanceMeters(a, b) {
 
 function createMemoryPothole(report) {
   const now = new Date().toISOString();
+  const reports = [{ ...report, createdAt: now, updatedAt: now }];
   return {
     id: crypto.randomUUID(),
     _id: crypto.randomUUID(),
@@ -35,7 +36,9 @@ function createMemoryPothole(report) {
     location: { type: "Point", coordinates: [report.longitude, report.latitude] },
     confidence: report.confidence,
     severity: report.severity,
-    reports: [{ ...report, createdAt: now, updatedAt: now }],
+    area: report.area,
+    riskScore: calculateRiskScore(report.severity, reports),
+    reports,
     votes: { stillExists: 0, fixed: 0, dangerous: 0 },
     status: "active",
     createdAt: now,
@@ -47,6 +50,7 @@ function normalizeReport(body) {
   const latitude = Number(body.latitude);
   const longitude = Number(body.longitude);
   const confidence = Number(body.confidence ?? 0.8);
+  const area = Number(body.area ?? 0);
 
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
     throw new Error("Valid latitude and longitude are required");
@@ -61,9 +65,10 @@ function normalizeReport(body) {
     longitude,
     confidence: Math.max(0, Math.min(1, confidence)),
     severity: ["minor", "medium", "severe"].includes(body.severity) ? body.severity : "medium",
+    area: Number.isFinite(area) ? Math.max(0, area) : 0,
     imageUrl: body.imageUrl,
     reportedBy: body.reportedBy || "anonymous",
-    source: body.source || "camera"
+    source: ["camera", "driving_mode", "manual", "import"].includes(body.source) ? body.source : "camera"
   };
 }
 
@@ -74,6 +79,75 @@ function aggregateSeverity(reports) {
   if (average >= 2.5) return "severe";
   if (average >= 1.5) return "medium";
   return "minor";
+}
+
+function calculateRiskScore(severity, reports) {
+  const severityComponent = (severityWeight[severity] / 3) * 50;
+  const reportComponent = Math.min(reports.length, 10) / 10 * 30;
+  const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recentReports = reports.filter((report) => {
+    const createdAt = report.createdAt ? new Date(report.createdAt).getTime() : Date.now();
+    return createdAt >= oneWeekAgo;
+  }).length;
+  const recentComponent = Math.min(recentReports, 5) / 5 * 20;
+
+  return Math.round(severityComponent + reportComponent + recentComponent);
+}
+
+function enrichAnalytics(pothole) {
+  const reportCount = pothole.reports?.length || 0;
+  const latestReport = pothole.reports?.[reportCount - 1];
+  const area =
+    reportCount > 0
+      ? pothole.reports.reduce((sum, report) => sum + Number(report.area || 0), 0) / reportCount
+      : Number(pothole.area || 0);
+  const riskScore = calculateRiskScore(pothole.severity, pothole.reports || []);
+
+  pothole.area = area;
+  pothole.riskScore = riskScore;
+  pothole.lastReportedAt = latestReport?.createdAt || pothole.updatedAt;
+  return pothole;
+}
+
+function summarizeDashboard(potholes) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const active = potholes.filter((pothole) => pothole.status !== "fixed");
+  const newReportsToday = active.reduce(
+    (sum, pothole) =>
+      sum +
+      (pothole.reports || []).filter((report) => new Date(report.createdAt || pothole.createdAt) >= today)
+        .length,
+    0
+  );
+
+  return {
+    totals: {
+      activeHazards: active.length,
+      severeHazards: active.filter((pothole) => pothole.severity === "severe").length,
+      newReportsToday,
+      repairQueue: active.filter((pothole) => pothole.riskScore >= 50 || pothole.votes?.dangerous > 0).length
+    },
+    repairQueue: [...active]
+      .sort((a, b) => b.riskScore - a.riskScore)
+      .slice(0, 20)
+      .map((pothole) => ({
+        id: pothole.id || pothole._id,
+        roadName: "Unassigned road segment",
+        latitude: pothole.latitude,
+        longitude: pothole.longitude,
+        potholes: pothole.reports?.length || 1,
+        severity: pothole.severity,
+        riskScore: pothole.riskScore,
+        lastReportedAt: pothole.lastReportedAt || pothole.updatedAt
+      })),
+    trends: {
+      severe: active.filter((pothole) => pothole.severity === "severe").length,
+      medium: active.filter((pothole) => pothole.severity === "medium").length,
+      minor: active.filter((pothole) => pothole.severity === "minor").length
+    }
+  };
 }
 
 router.get("/", async (req, res, next) => {
@@ -91,7 +165,7 @@ router.get("/", async (req, res, next) => {
           )
         : memoryPotholes;
 
-      return res.json(potholes);
+      return res.json(potholes.map(enrichAnalytics));
     }
 
     const { minLat, minLng, maxLat, maxLng } = req.query;
@@ -111,7 +185,20 @@ router.get("/", async (req, res, next) => {
       : {};
 
     const potholes = await Pothole.find(filter).sort({ updatedAt: -1 }).limit(1000);
-    res.json(potholes);
+    res.json(potholes.map((pothole) => enrichAnalytics(pothole.toJSON())));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/dashboard", async (_req, res, next) => {
+  try {
+    if (usingMemoryStore()) {
+      return res.json(summarizeDashboard(memoryPotholes.map(enrichAnalytics)));
+    }
+
+    const potholes = await Pothole.find({}).sort({ updatedAt: -1 }).limit(2000);
+    res.json(summarizeDashboard(potholes.map((pothole) => enrichAnalytics(pothole.toJSON()))));
   } catch (error) {
     next(error);
   }
@@ -139,7 +226,7 @@ router.get("/nearby", async (req, res, next) => {
         .slice(0, 50)
         .map((item) => item.pothole);
 
-      return res.json(potholes);
+      return res.json(potholes.map(enrichAnalytics));
     }
 
     const potholes = await Pothole.find({
@@ -152,7 +239,7 @@ router.get("/nearby", async (req, res, next) => {
       }
     }).limit(50);
 
-    res.json(potholes);
+    res.json(potholes.map((pothole) => enrichAnalytics(pothole.toJSON())));
   } catch (error) {
     next(error);
   }
@@ -175,8 +262,12 @@ router.post("/", async (req, res, next) => {
           existing.reports.reduce((sum, item) => sum + item.confidence, 0) /
           existing.reports.length;
         existing.severity = aggregateSeverity(existing.reports);
+        existing.area =
+          existing.reports.reduce((sum, item) => sum + Number(item.area || 0), 0) /
+          existing.reports.length;
+        existing.riskScore = calculateRiskScore(existing.severity, existing.reports);
         existing.updatedAt = new Date().toISOString();
-        pothole = existing;
+        pothole = enrichAnalytics(existing);
       } else {
         pothole = createMemoryPothole(report);
         memoryPotholes.unshift(pothole);
@@ -202,18 +293,25 @@ router.post("/", async (req, res, next) => {
       existing.confidence =
         existing.reports.reduce((sum, item) => sum + item.confidence, 0) / existing.reports.length;
       existing.severity = aggregateSeverity(existing.reports);
+      existing.area =
+        existing.reports.reduce((sum, item) => sum + Number(item.area || 0), 0) /
+        existing.reports.length;
+      existing.riskScore = calculateRiskScore(existing.severity, existing.reports);
       pothole = await existing.save();
     } else {
       pothole = await Pothole.create({
         location: { type: "Point", coordinates: [report.longitude, report.latitude] },
         confidence: report.confidence,
         severity: report.severity,
+        area: report.area,
+        riskScore: calculateRiskScore(report.severity, [report]),
         reports: [report]
       });
     }
 
-    req.app.get("io").emit("pothole:upserted", pothole);
-    res.status(existing ? 200 : 201).json(pothole);
+    const payload = enrichAnalytics(pothole.toJSON());
+    req.app.get("io").emit("pothole:upserted", payload);
+    res.status(existing ? 200 : 201).json(payload);
   } catch (error) {
     next(error);
   }

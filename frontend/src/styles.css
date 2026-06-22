@@ -22,6 +22,15 @@ button {
   cursor: pointer;
 }
 
+.visually-hidden {
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  width: 1px;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: minmax(320px, 380px) 1fr;
@@ -78,6 +87,7 @@ button {
 
 .search-row button,
 .control-grid button,
+.view-tabs button,
 .popup button {
   align-items: center;
   background: #ffffff;
@@ -94,13 +104,32 @@ button {
 .control-grid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
 }
 
-.control-grid button.active {
+.control-grid button.active,
+.view-tabs button.active {
   background: #dbeafe;
   border-color: #2563eb;
   color: #1d4ed8;
+}
+
+.control-grid button.danger {
+  background: #fee2e2;
+  border-color: #ef4444;
+  color: #b91c1c;
+}
+
+.control-grid button.heat {
+  background: #fff7ed;
+  border-color: #f59e0b;
+  color: #9a3412;
+}
+
+.view-tabs {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
 }
 
 .result-list {
@@ -134,6 +163,7 @@ button {
 
 .status-panel,
 .metric-grid > div,
+.risk-panel,
 .warning {
   background: #ffffff;
   border: 1px solid #d8dee9;
@@ -142,7 +172,8 @@ button {
 }
 
 .status-panel span,
-.metric-grid span {
+.metric-grid span,
+.risk-panel span {
   color: #64748b;
   display: block;
   font-size: 0.78rem;
@@ -151,15 +182,124 @@ button {
 }
 
 .status-panel strong,
-.metric-grid strong {
+.metric-grid strong,
+.risk-panel strong {
   color: #172033;
   font-size: 1rem;
+}
+
+.risk-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.risk-panel p {
+  color: #475569;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.risk-meter {
+  background: #e2e8f0;
+  border-radius: 999px;
+  height: 9px;
+  overflow: hidden;
+}
+
+.risk-meter span {
+  background: #2563eb;
+  display: block;
+  height: 100%;
+}
+
+.risk-moderate .risk-meter span {
+  background: #f59e0b;
+}
+
+.risk-dangerous .risk-meter span {
+  background: #ef4444;
 }
 
 .metric-grid {
   display: grid;
   gap: 10px;
   grid-template-columns: 1fr 1fr;
+}
+
+.camera-preview {
+  aspect-ratio: 16 / 9;
+  background: #0f172a;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  object-fit: cover;
+  width: 100%;
+}
+
+.dashboard-panel {
+  background: #ffffff;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.dashboard-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.dashboard-grid div {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.dashboard-grid span,
+.repair-row span {
+  color: #64748b;
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.dashboard-grid strong {
+  color: #172033;
+  display: block;
+  font-size: 1.15rem;
+  margin-top: 4px;
+}
+
+.repair-table {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.repair-row {
+  align-items: center;
+  border-bottom: 1px solid #e2e8f0;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr auto;
+  padding: 10px;
+}
+
+.repair-row:last-child {
+  border-bottom: 0;
+}
+
+.repair-row strong {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.repair-row b {
+  color: #ef4444;
 }
 
 .warning {
