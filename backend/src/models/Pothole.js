@@ -41,7 +41,12 @@ const potholeSchema = new mongoose.Schema(
     },
     confidence: { type: Number, min: 0, max: 1, required: true },
     area: { type: Number, min: 0, default: 0 },
+    estimatedDepthCm: { type: Number, min: 0 },
     riskScore: { type: Number, min: 0, max: 100, default: 0 },
+    roadSegmentId: { type: mongoose.Schema.Types.ObjectId, ref: "RoadSegment" },
+    osmWayId: String,
+    roadName: String,
+    roadType: String,
     reports: [reportSchema],
     votes: {
       stillExists: { type: Number, default: 0 },
@@ -58,6 +63,8 @@ const potholeSchema = new mongoose.Schema(
 );
 
 potholeSchema.index({ location: "2dsphere" });
+potholeSchema.index({ roadSegmentId: 1 });
+potholeSchema.index({ osmWayId: 1 });
 
 potholeSchema.virtual("latitude").get(function latitude() {
   return this.location.coordinates[1];

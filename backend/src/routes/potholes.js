@@ -1,6 +1,11 @@
 import express from "express";
 import mongoose from "mongoose";
 import Pothole from "../models/Pothole.js";
+import DetectionEvent from "../models/DetectionEvent.js";
+import RoadSegment from "../models/RoadSegment.js";
+import { createDetectionEvent } from "../services/detectionEvent.js";
+import { matchToRoad, extractRoadType } from "../services/mapMatching.js";
+import { upsertRoadSegment, updateSegmentStats } from "../services/roadSegment.js";
 
 const router = express.Router();
 
@@ -51,6 +56,7 @@ function normalizeReport(body) {
   const longitude = Number(body.longitude);
   const confidence = Number(body.confidence ?? 0.8);
   const area = Number(body.area ?? 0);
+  const estimatedDepthCm = body.estimatedDepthCm !== undefined ? Number(body.estimatedDepthCm) : undefined;
 
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
     throw new Error("Valid latitude and longitude are required");
@@ -66,9 +72,13 @@ function normalizeReport(body) {
     confidence: Math.max(0, Math.min(1, confidence)),
     severity: ["minor", "medium", "severe"].includes(body.severity) ? body.severity : "medium",
     area: Number.isFinite(area) ? Math.max(0, area) : 0,
+    estimatedDepthCm: Number.isFinite(estimatedDepthCm) ? Math.max(0, estimatedDepthCm) : undefined,
+    bbox: Array.isArray(body.bbox) ? body.bbox : undefined,
     imageUrl: body.imageUrl,
     reportedBy: body.reportedBy || "anonymous",
-    source: ["camera", "driving_mode", "manual", "import"].includes(body.source) ? body.source : "camera"
+    source: ["camera", "driving_mode", "manual", "import"].includes(body.source) ? body.source : "camera",
+    deviceId: body.deviceId,
+    imageHash: body.imageHash
   };
 }
 
@@ -277,6 +287,25 @@ router.post("/", async (req, res, next) => {
       return res.status(existing ? 200 : 201).json(pothole);
     }
 
+    // Map-match to road
+    const roadMatch = await matchToRoad(report.latitude, report.longitude);
+    let roadSegment = null;
+
+    if (roadMatch?.osmWayId && roadMatch.osmWayId !== "unknown") {
+      roadSegment = await upsertRoadSegment(
+        roadMatch.osmWayId,
+        roadMatch.roadName,
+        extractRoadType(roadMatch.roadName),
+        {
+          type: "LineString",
+          coordinates: [
+            [report.longitude, report.latitude],
+            [roadMatch.matchedLocation.longitude, roadMatch.matchedLocation.latitude]
+          ]
+        }
+      );
+    }
+
     const existing = await Pothole.findOne({
       location: {
         $nearSphere: {
@@ -297,6 +326,14 @@ router.post("/", async (req, res, next) => {
         existing.reports.reduce((sum, item) => sum + Number(item.area || 0), 0) /
         existing.reports.length;
       existing.riskScore = calculateRiskScore(existing.severity, existing.reports);
+
+      if (roadSegment) {
+        existing.roadSegmentId = roadSegment._id;
+        existing.osmWayId = roadSegment.osmWayId;
+        existing.roadName = roadSegment.roadName;
+        existing.roadType = roadSegment.roadType;
+      }
+
       pothole = await existing.save();
     } else {
       pothole = await Pothole.create({
@@ -304,9 +341,35 @@ router.post("/", async (req, res, next) => {
         confidence: report.confidence,
         severity: report.severity,
         area: report.area,
+        estimatedDepthCm: report.estimatedDepthCm,
         riskScore: calculateRiskScore(report.severity, [report]),
-        reports: [report]
+        reports: [report],
+        roadSegmentId: roadSegment?._id,
+        osmWayId: roadMatch?.osmWayId,
+        roadName: roadMatch?.roadName,
+        roadType: roadMatch ? extractRoadType(roadMatch.roadName) : undefined
       });
+    }
+
+    // Create detection event
+    await createDetectionEvent({
+      potholeId: pothole._id,
+      latitude: report.latitude,
+      longitude: report.longitude,
+      confidence: report.confidence,
+      severity: report.severity,
+      estimatedDepthCm: report.estimatedDepthCm,
+      area: report.area,
+      bbox: report.bbox,
+      source: report.source,
+      deviceId: report.deviceId,
+      imageHash: report.imageHash,
+      reportedBy: report.reportedBy
+    });
+
+    // Update segment stats
+    if (roadSegment) {
+      await updateSegmentStats(roadSegment._id);
     }
 
     const payload = enrichAnalytics(pothole.toJSON());

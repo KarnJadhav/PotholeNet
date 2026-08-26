@@ -1,6 +1,7 @@
 import express from "express";
 import mongoose from "mongoose";
 import Pothole from "../models/Pothole.js";
+import RoadSegment from "../models/RoadSegment.js";
 
 const router = express.Router();
 
@@ -56,8 +57,33 @@ function buildSegment(potholes) {
   };
 }
 
+// GET /api/segments - Return segments from RoadSegment collection or fallback to computed
 router.get("/", async (req, res, next) => {
   try {
+    if (mongoose.connection.readyState === 1) {
+      const segments = await RoadSegment.find({})
+        .sort({ healthScore: 1 })
+        .limit(500);
+
+      if (segments.length > 0) {
+        return res.json(segments.map(segment => ({
+          id: segment._id,
+          osmWayId: segment.osmWayId,
+          roadName: segment.roadName,
+          roadType: segment.roadType,
+          center: { latitude: segment.latitude, longitude: segment.longitude },
+          path: segment.geometry?.coordinates?.map(([lng, lat]) => [lat, lng]) || [],
+          potholes: segment.potholeCount,
+          activePotholes: segment.activePotholeCount,
+          severityScore: segment.severityScore,
+          healthScore: segment.healthScore,
+          risk: segment.risk,
+          lastIncidentAt: segment.lastIncidentAt
+        })));
+      }
+    }
+
+    // Fallback: compute from potholes
     let source = req.app.locals.memoryPotholes || [];
 
     if (mongoose.connection.readyState === 1) {
@@ -71,6 +97,30 @@ router.get("/", async (req, res, next) => {
     });
 
     res.json([...grouped.values()].map(buildSegment).sort((a, b) => a.healthScore - b.healthScore));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/segments/:id - Get single segment with potholes
+router.get("/:id", async (req, res, next) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ message: "Database required for segment lookup" });
+    }
+
+    const segment = await RoadSegment.findById(req.params.id);
+
+    if (!segment) {
+      return res.status(404).json({ message: "Segment not found" });
+    }
+
+    const potholes = await Pothole.find({ roadSegmentId: segment._id, status: "active" });
+
+    res.json({
+      ...segment.toJSON(),
+      potholeList: potholes.map(p => p.toJSON())
+    });
   } catch (error) {
     next(error);
   }
