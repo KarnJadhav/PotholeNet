@@ -1,3 +1,5 @@
+#<a href="https://tinyurl.com/2w2kzzsp"> Pothole Net Demo -> </a>
+
 # 🚧 PotholeNet
 
 ### Real-Time Road Intelligence & Civic Infrastructure Platform
@@ -8,7 +10,7 @@ PotholeNet is a road-intelligence platform that combines **computer vision, geos
 > **Current intelligence pipeline:** Detection → Pothole Intelligence → Road Segments → OSM Mapping → Authority Mapping → Road Contracts → Route Risk
 
 ---
-#<a href="https://tinyurl.com/2w2kzzsp"> Pothole Net Demo -> </a>
+
 
 ## 📌 Overview
 
