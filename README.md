@@ -8,6 +8,7 @@ PotholeNet is a road-intelligence platform that combines **computer vision, geos
 > **Current intelligence pipeline:** Detection → Pothole Intelligence → Road Segments → OSM Mapping → Authority Mapping → Road Contracts → Route Risk
 
 ---
+#<a href="https://tinyurl.com/2w2kzzsp"> Pothole Net Demo -> </a>
 
 ## 📌 Overview
 
@@ -317,21 +318,6 @@ A color/brightness augmentation experiment was attempted but caused regressions 
 
 The remaining improvement direction is to collect better-matched patch/repair negatives or real field data.
 
----
-
-# 🗂️ ML Dataset
-
-## Sources
-
-| Source | Role | License / Status |
-|---|---|---|
-| **RDD2022** | Pothole detection (`D40`) | ⚠️ Unconfirmed — see `DATASETS.md` |
-| **Pothole-600** | Pothole detection | ❌ License not verified |
-| **Attain** | Negative/background examples | ✅ CC BY 4.0 |
-| **Custom Indian-road images** | Domain-specific road imagery | Own data |
-
-The repository's `DATASETS.md` is the compliance tracker. Dataset licensing and code licensing are separate concerns.
-
 ## Dataset pipeline
 
 ```text
@@ -364,23 +350,9 @@ Evaluation
 Real-world Regression Testing
 ```
 
-### Preparation
-
-```bash
-python scripts/prepare_dataset.py \
-  --rdd2022-images /path/to/rdd/images \
-  --rdd2022-annots /path/to/rdd/annotations \
-  --pothole600-images /path/to/pothole600/images \
-  --pothole600-labels /path/to/pothole600/labels \
-  --custom-images /path/to/custom/images \
-  --custom-labels /path/to/custom/labels \
-  --out datasets/potholes \
-  --rdd-keep-negatives-frac 0.15
-```
-
 The preparation pipeline:
 
-- Converts RDD2022 VOC/XML annotations to YOLO format.
+- Converts VOC/XML annotations to YOLO format.
 - Keeps the `D40` pothole class.
 - Uses class ID `0` for the single-class detector.
 - Performs content-based deduplication.
