@@ -1,5 +1,3 @@
-##PotholeNet Demo : <a href="https://tinyurl.com/2w2kzzsp">Live detection Demo</a>
-
 # 🚧 PotholeNet
 
 ### Real-Time Road Intelligence & Civic Infrastructure Platform
